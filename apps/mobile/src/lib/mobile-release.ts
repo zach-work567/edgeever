@@ -31,10 +31,6 @@ type LatestReleaseResponse = {
 };
 
 export type MobileRelease = {
-  digest: string;
-  downloadUrl: string;
-  fileName: string;
-  size: number;
   version: string;
 };
 
@@ -45,47 +41,18 @@ const normalizeVersion = (value: string) => {
 
 const ANDROID_ASSET_PATTERN = /^edgeever-android-v(\d+\.\d+\.\d+)-arm64-v8a\.apk$/;
 
-const findAndroidReleaseAsset = (assets: unknown): MobileRelease | null => {
+export const findAndroidReleaseVersion = (assets: unknown) => {
   if (!Array.isArray(assets)) return null;
-  const releases = assets
+  const versions = assets
     .map((asset) => {
-      if (
-        !asset ||
-        typeof asset !== "object" ||
-        !("name" in asset) ||
-        typeof asset.name !== "string"
-      ) {
+      if (!asset || typeof asset !== "object" || !("name" in asset) || typeof asset.name !== "string") {
         return null;
       }
-      const version = ANDROID_ASSET_PATTERN.exec(asset.name)?.[1];
-      if (
-        !version ||
-        !("browser_download_url" in asset) ||
-        typeof asset.browser_download_url !== "string" ||
-        !asset.browser_download_url.startsWith("https://github.com/tianma-if/edgeever/releases/download/") ||
-        !("digest" in asset) ||
-        typeof asset.digest !== "string" ||
-        !/^sha256:[a-f0-9]{64}$/.test(asset.digest) ||
-        !("size" in asset) ||
-        typeof asset.size !== "number" ||
-        !Number.isSafeInteger(asset.size) ||
-        asset.size <= 0
-      ) {
-        return null;
-      }
-      return {
-        digest: asset.digest,
-        downloadUrl: asset.browser_download_url,
-        fileName: asset.name,
-        size: asset.size,
-        version,
-      };
+      return ANDROID_ASSET_PATTERN.exec(asset.name)?.[1] ?? null;
     })
-    .filter((release): release is MobileRelease => Boolean(release));
-  return releases.length === 1 ? releases[0] : null;
+    .filter((version): version is string => Boolean(version));
+  return versions.length === 1 ? versions[0] : null;
 };
-
-export const findAndroidReleaseVersion = (assets: unknown) => findAndroidReleaseAsset(assets)?.version ?? null;
 
 export const findNewerMobileRelease = async (
   currentVersion: string,
@@ -114,10 +81,10 @@ export const findNewerMobileRelease = async (
   if (!releaseVersion) {
     throw new Error(`Invalid GitHub release version: ${release.tag_name}`);
   }
-  const latestRelease = findAndroidReleaseAsset(release.assets);
-  if (!latestRelease) {
+  const latestVersion = findAndroidReleaseVersion(release.assets);
+  if (!latestVersion) {
     throw new Error("GitHub release response does not contain exactly one Android APK");
   }
 
-  return gt(latestRelease.version, normalizedCurrentVersion) ? latestRelease : null;
+  return gt(latestVersion, normalizedCurrentVersion) ? { version: latestVersion } : null;
 };

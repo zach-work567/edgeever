@@ -1,20 +1,22 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import Constants from "expo-constants";
-import { AppState, Platform, type AppStateStatus } from "react-native";
+import { AppState, Linking, Platform, type AppStateStatus } from "react-native";
 import * as Updates from "expo-updates";
 import { Alert } from "../components/LocalizedText";
 import { useMobileLocale } from "./mobile-locale";
-import { downloadAndInstallAndroidApk } from "./android-apk-update";
-import { findNewerMobileRelease, type MobileRelease } from "./mobile-release";
+import {
+  ANDROID_INSTALL_UPDATE_SOURCES,
+  findNewerMobileRelease,
+  getDefaultMobileInstallUpdateUrl,
+} from "./mobile-release";
 
 const FOREGROUND_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
-type MobileUpdateStatus = "idle" | "checking" | "available" | "downloading" | "ready" | "installing";
+type MobileUpdateStatus = "idle" | "checking" | "available" | "downloading" | "ready";
 export type MobileUpdateKind = "install" | "ota";
 
 type MobileUpdateContextValue = {
   checkForUpdate: () => Promise<void>;
-  downloadProgress: number | null;
   hasUpdate: boolean;
   installedVersion: string | null;
   isSupported: boolean;
@@ -25,7 +27,6 @@ type MobileUpdateContextValue = {
 
 const MobileUpdateContext = createContext<MobileUpdateContextValue>({
   checkForUpdate: async () => undefined,
-  downloadProgress: null,
   hasUpdate: false,
   installedVersion: null,
   isSupported: false,
@@ -36,8 +37,6 @@ const MobileUpdateContext = createContext<MobileUpdateContextValue>({
 
 export const MobileUpdateProvider = ({ children }: { children: ReactNode }) => {
   const { resolvedLocale } = useMobileLocale();
-  const [downloadProgress, setDownloadProgress] = useState<number | null>(null);
-  const [installRelease, setInstallRelease] = useState<MobileRelease | null>(null);
   const [status, setStatus] = useState<MobileUpdateStatus>("idle");
   const [updateKind, setUpdateKind] = useState<MobileUpdateKind | null>(null);
   const activeCheckRef = useRef<Promise<void> | null>(null);
@@ -74,7 +73,6 @@ export const MobileUpdateProvider = ({ children }: { children: ReactNode }) => {
             }
             const release = await findNewerMobileRelease(installedVersion);
             if (release) {
-              setInstallRelease(release);
               setUpdateKind("install");
               setStatus("available");
               return;
@@ -87,7 +85,6 @@ export const MobileUpdateProvider = ({ children }: { children: ReactNode }) => {
         const result = await Updates.checkForUpdateAsync();
 
         if (!result.isAvailable) {
-          setInstallRelease(null);
           setUpdateKind(null);
           setStatus("idle");
           return;
@@ -96,7 +93,6 @@ export const MobileUpdateProvider = ({ children }: { children: ReactNode }) => {
         setUpdateKind("ota");
         setStatus("available");
       } catch {
-        setInstallRelease(null);
         setUpdateKind(null);
         setStatus("idle");
       }
@@ -132,46 +128,30 @@ export const MobileUpdateProvider = ({ children }: { children: ReactNode }) => {
 
   const openUpdate = useCallback(async () => {
     if (updateKind === "install") {
-      if (Platform.OS !== "android" || !installRelease || status === "downloading" || status === "installing") {
+      if (Platform.OS === "android") {
+        Alert.alert(
+          english ? "Update available" : "发现新版本",
+          english
+            ? "Get the latest version from GitHub Releases."
+            : "可从 GitHub Releases 获取最新版本。",
+          [
+            ...ANDROID_INSTALL_UPDATE_SOURCES.map((source) => ({
+              text: english ? source.labelEn : source.labelZh,
+              onPress: () => {
+                void Linking.openURL(source.url);
+              },
+            })),
+            {
+              text: english ? "Cancel" : "取消",
+              style: "cancel" as const,
+            },
+          ]
+        );
         return;
       }
-      const sizeMb = Math.max(1, Math.ceil(installRelease.size / 1024 / 1024));
-      Alert.alert(
-        english ? "Update available" : "发现新版本",
-        english
-          ? `EdgeEver ${installRelease.version} is available. Download ${sizeMb} MB and install it now?`
-          : `EdgeEver ${installRelease.version} 已发布。是否立即下载 ${sizeMb} MB 安装包并更新？`,
-        [
-          {
-            text: english ? "Cancel" : "取消",
-            style: "cancel",
-          },
-          {
-            text: english ? "Download & install" : "下载并安装",
-            onPress: () => {
-              setDownloadProgress(0);
-              setStatus("downloading");
-              void downloadAndInstallAndroidApk(
-                installRelease,
-                ({ progress }) => setDownloadProgress(progress),
-                () => setStatus("installing")
-              ).then(() => {
-                setDownloadProgress(null);
-                setStatus("available");
-              }).catch(() => {
-                setDownloadProgress(null);
-                setStatus("available");
-                Alert.alert(
-                  english ? "Update failed" : "更新失败",
-                  english
-                    ? "Could not download or open the installer. Try again later."
-                    : "无法下载安装包或打开系统安装器，请稍后重试。"
-                );
-              });
-            },
-          },
-        ]
-      );
+
+      const url = getDefaultMobileInstallUpdateUrl(Platform.OS);
+      await Linking.openURL(url);
       return;
     }
 
@@ -224,22 +204,21 @@ export const MobileUpdateProvider = ({ children }: { children: ReactNode }) => {
           : "无法下载应用内更新，请稍后再试。"
       );
     }
-  }, [english, installRelease, isSupported, status, updateKind]);
+  }, [english, isSupported, status, updateKind]);
 
   const value = useMemo<MobileUpdateContextValue>(
     () => ({
       checkForUpdate: () => {
         return runCheck(true);
       },
-      downloadProgress,
-      hasUpdate: status === "available" || status === "ready" || status === "downloading" || status === "installing",
+      hasUpdate: status === "available" || status === "ready" || status === "downloading",
       installedVersion,
       isSupported,
       openUpdate,
       status,
       updateKind,
     }),
-    [downloadProgress, installedVersion, isSupported, openUpdate, runCheck, status, updateKind]
+    [installedVersion, isSupported, openUpdate, runCheck, status, updateKind]
   );
 
   return <MobileUpdateContext.Provider value={value}>{children}</MobileUpdateContext.Provider>;
